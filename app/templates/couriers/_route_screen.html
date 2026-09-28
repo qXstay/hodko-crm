@@ -1,0 +1,249 @@
+{% import "_ui.html" as ui %}
+{% set rs = route_summary %}
+{% set day = rs.route_date %}
+{% set prev_day = (day|string) %}
+{% set is_board = filters.detail in ("", "couriers") %}
+{% set unassigned = rs.orders|selectattr("courier_id", "none")|list %}
+{% set active_items = rs.couriers|selectattr("orders_count")|list %}
+
+<header class="page-head">
+  <div class="page-title-line">
+    <h1>Маршрут</h1>
+    <p class="page-date">{{ day|weekday_full|capitalize }}, {{ day|day_month }}{% if rs.courier %}, {{ rs.courier.full_name }}{% endif %}</p>
+  </div>
+</header>
+
+<section class="toolbar route-filter-panel" aria-label="Параметры маршрута">
+  <form class="toolbar-row route-filters route-filters-date-first toolbar-autosubmit" method="get" action="/couriers">
+    <div class="field route-date-field">
+      <label class="visually-hidden" for="route_date">Дата доставки</label>
+      <input id="route_date" name="date" type="date" value="{{ filters.date }}" data-autosubmit>
+    </div>
+    <div class="field route-courier-field">
+      <label class="visually-hidden" for="courier_id">Курьер</label>
+      <select id="courier_id" name="courier_id" data-autosubmit>
+        <option value="all" {% if filters.courier_id == "all" %}selected{% endif %}>Все курьеры</option>
+        {% for courier in couriers %}
+          <option value="{{ courier.id }}" {% if filters.courier_id == courier.id|string %}selected{% endif %}>
+            {{ courier.full_name }}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    {% if filters.detail %}<input type="hidden" name="detail" value="{{ filters.detail }}">{% endif %}
+    <div class="route-filter-submit">
+      <button class="btn btn-secondary" type="submit">Показать</button>
+    </div>
+  </form>
+</section>
+
+{# Итоги дня — одной строкой вкладок с числами: курьеры (доска дня), заявки, в работе, у курьера, доставлено.
+   Деньги — тихой строкой справа. #}
+<div class="route-summary">
+  <nav class="status-tabs route-tabs" aria-label="Итоги дня">
+    <a class="status-tab{% if is_board %} is-active{% endif %}" href="{{ detail_links.couriers }}"{% if is_board %} aria-current="page"{% endif %}>Курьеры<span class="count">{{ rs.couriers_count }}</span>{% if is_board %}<span class="status-tab-ink" aria-hidden="true"></span>{% endif %}</a>
+    <a class="status-tab{% if filters.detail == 'all' %} is-active{% endif %}" href="{{ detail_links.all }}"{% if filters.detail == 'all' %} aria-current="page"{% endif %}>Заявки<span class="count">{{ rs.orders_count }}</span>{% if filters.detail == 'all' %}<span class="status-tab-ink" aria-hidden="true"></span>{% endif %}</a>
+    {% for key, count in (("in_work", rs.in_work_count), ("at_courier", rs.at_courier_count), ("delivered", rs.delivered_count)) %}
+      <a class="status-tab{% if filters.detail == key %} is-active{% endif %}" href="{{ detail_links[key] }}"{% if filters.detail == key %} aria-current="page"{% endif %}>{{ ui.track(key, with_label=False) }}{{ key|status_label }}<span class="count">{{ count }}</span>{% if filters.detail == key %}<span class="status-tab-ink" aria-hidden="true"></span>{% endif %}</a>
+    {% endfor %}
+  </nav>
+  {% if can_view_route_money %}
+    <p class="route-money">Выручка <strong>{{ rs.delivery_total|money }}</strong>, курьерам {{ rs.courier_pay_total|money }}</p>
+  {% endif %}
+</div>
+
+{% if is_board %}
+  {% set tl = day_timeline %}
+  {% if tl.rows %}
+    {# День курьеров: только записанные системой отметки «забрал» и «доставил»; плана по времени у заявок нет. #}
+    <section class="card day-line" aria-labelledby="day-line-title" data-day-line data-day="{{ tl.day.isoformat() }}" data-start="{{ tl.start_hour }}" data-end="{{ tl.end_hour }}" style="--hour: {{ tl.grid_percent }}%">
+      <header class="card-head">
+        <h2 id="day-line-title">День курьеров</h2>
+        <ul class="day-line-legend" aria-label="Обозначения">
+          <li><i class="day-mark is-pickup" aria-hidden="true"></i>забрал</li>
+          {#- Несколько разом — двумя кольцами, без цифры: цифра в кружке — это номер остановки в карточках ниже. -#}
+          {% if tl.has_group_pickups %}<li><i class="day-mark is-pickup is-many" aria-hidden="true"></i>забрал сразу несколько</li>{% endif %}
+          <li><i class="day-mark is-delivered" aria-hidden="true">{{ ui.icon("check") }}</i>доставил</li>
+        </ul>
+      </header>
+      <div class="day-line-scroll" data-day-line-scroll>
+        <div class="day-line-grid">
+          <div class="day-line-scale" aria-hidden="true">
+            {#- На телефоне подписей не больше пяти: остальные часы видны только линиями сетки. -#}
+            {% set label_every = ((tl.hours|length) / 5)|round(0, "ceil")|int %}
+            {% for hour, pos in tl.hours %}<span style="--x: {{ pos }}%"{% if loop.index0 % label_every %} class="is-minor"{% endif %}>{{ "%02d:00"|format(hour % 24) }}</span>{% endfor %}
+          </div>
+          {% for row in tl.rows %}
+            <div class="day-line-row">
+              <div class="day-line-who">
+                {{ ui.avatar(row.courier_name, row.courier_id, "sm") }}
+                <span class="day-line-name">{{ row.courier_name }}</span>
+                <span class="day-line-first" aria-hidden="true">{{ row.courier_name.split()[0] }}</span>
+              </div>
+              <div class="day-line-track"{% if row.events %} style="--first: {{ row.band_start }}%; --done: {{ row.band_end }}%"{% endif %}>
+                <ol class="day-lane" aria-label="{{ row.courier_name }}: отметки за день">
+                  {#- Отметки — не ссылки: на телефоне они в 7 px друг от друга, области нажатия не поместятся.
+                      Время и номер — в подсказке и для чтения с экрана; открыть заявку — в карточках курьеров ниже. -#}
+                  {% for mark in row.marks %}
+                    <li style="--x: {{ mark.x }}%">
+                      {%- if mark.kind == "pickup" -%}
+                        <span class="day-mark is-pickup{% if mark.count > 1 %} is-many{% endif %}" role="img" aria-label="{{ mark.label }}" title="{{ mark.label }}"></span>
+                      {%- else -%}
+                        <span class="day-mark is-delivered" role="img" aria-label="{{ mark.label }}" title="{{ mark.label }}">{{ ui.icon("check") }}</span>
+                      {%- endif -%}
+                    </li>
+                  {% endfor %}
+                </ol>
+              </div>
+              <p class="day-line-sum"><span class="day-line-sum-long"><strong>{{ row.delivered }}</strong> доставлено{% if row.remaining %}<span class="muted">, ещё {{ row.remaining }}</span>{% endif %}</span><span class="day-line-sum-short" aria-hidden="true"><strong>{{ row.delivered }}</strong> из {{ row.delivered + row.remaining }}</span></p>
+            </div>
+          {% endfor %}
+          {% if tl.now_position is not none %}
+            <div class="day-line-now{% if tl.now_position < 10 %} is-early{% elif tl.now_position > 90 %} is-late{% endif %}" data-now-line style="--now: {{ tl.now_position }}%">
+              <div class="day-line-now-bar"><span class="day-line-now-label"><span class="day-line-now-word">сейчас </span><span data-now-label>{{ tl.now.strftime("%H:%M") }}</span></span></div>
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    </section>
+  {% endif %}
+  {% if rs.orders %}
+    {# Карточки курьеров заполняют ряд: колонок столько, сколько карточек (до четырёх), но не уже 290 px. #}
+    <section class="dispatch" aria-label="Курьеры и их остановки" style="--cols: {{ [[active_items|length + (1 if unassigned and not rs.courier else 0), 1]|max, 4]|min }}">
+      {% for item in active_items %}
+        {% set stops = rs.orders|selectattr("courier_id", "equalto", item.courier.id)|list %}
+        <article class="dispatch-col" style="--i: {{ loop.index0 }}">
+          <header class="dispatch-head">
+            {{ ui.avatar(item.courier.full_name, item.courier.id) }}
+            <div class="dispatch-who">
+              <h2>{{ item.courier.full_name }}</h2>
+              <span class="muted">{{ item.courier.phone|phone("Телефон не указан") }}</span>
+            </div>
+            <span class="dispatch-count"><strong>{{ item.delivered_count }}</strong>/{{ item.orders_count }}</span>
+          </header>
+          {# Полосы прогресса в карточке нет: итог дня курьера уже на шкале выше и в «1/3» в шапке карточки. #}
+          <ol class="dispatch-stops">
+            {% for order in stops %}
+              <li class="dispatch-stop stop-{{ order.status.value }}">
+                <a href="/orders/{{ order.id }}">
+                  {# Доставленное видно по зелёному номеру; словом — только то, что ещё не сделано. #}
+                  <span class="dispatch-num">{{ loop.index }}<span class="visually-hidden">, {{ order.status|status_label|lower }}</span></span>
+                  <span class="dispatch-body">
+                    <span class="dispatch-line"><span class="code">{{ order.order_code }}</span>{% if order.status.value != "delivered" %}<span class="status {{ order.status|status_class }} dispatch-state">{{ order.status|status_label }}</span>{% endif %}</span>
+                    <span class="dispatch-address">{{ order.address }}</span>
+                    <span class="dispatch-client">{{ order.client_name_snapshot }}</span>
+                  </span>
+                </a>
+              </li>
+            {% endfor %}
+          </ol>
+          <footer class="dispatch-foot">
+            {% if can_view_route_money %}<span class="muted">Выручка {{ item.delivery_total|money }}</span>{% endif %}
+            <a class="btn btn-sm btn-row route-open-link" href="/couriers/{{ item.courier.id }}/route?date={{ day.isoformat() }}">{{ ui.icon("route") }}Маршрут</a>
+          </footer>
+        </article>
+      {% endfor %}
+      {% if unassigned and not rs.courier %}
+        <article class="dispatch-col dispatch-unassigned">
+          <header class="dispatch-head">
+            <span class="avatar avatar-empty">{{ ui.icon("circle-dashed") }}</span>
+            <div class="dispatch-who">
+              <h2>Без курьера</h2>
+              <span class="muted">Назначьте в заявке</span>
+            </div>
+            <span class="dispatch-count"><strong>{{ unassigned|length }}</strong></span>
+          </header>
+          <ol class="dispatch-stops">
+            {% for order in unassigned %}
+              <li class="dispatch-stop stop-{{ order.status.value }}">
+                <a href="/orders/{{ order.id }}">
+                  <span class="dispatch-num">{{ ui.icon("plus") }}</span>
+                  <span class="dispatch-body">
+                    <span class="dispatch-line"><span class="code">{{ order.order_code }}</span></span>
+                    <span class="dispatch-address">{{ order.address }}</span>
+                    <span class="dispatch-client">{{ order.client_name_snapshot }}</span>
+                  </span>
+                </a>
+              </li>
+            {% endfor %}
+          </ol>
+        </article>
+      {% endif %}
+    </section>
+  {% else %}
+    {{ ui.empty("На эту дату заявок нет", "Выберите другую дату или создайте заявку.", "route", "/orders/new", "Новая заявка") }}
+  {% endif %}
+{% else %}
+  <section class="route-results" aria-label="Заявки маршрута">
+    <div class="section-title">
+      <h2>{{ rs.detail_title }}</h2>
+      <span class="section-note">{{ day|ru_date }}, {% if rs.courier %}{{ rs.courier.full_name }}{% else %}все курьеры{% endif %}</span>
+    </div>
+
+    {% if rs.detail_orders %}
+      <div class="table-card has-cards route-results-table">
+        <div class="table-scroll">
+          <table class="table route-table">
+            <thead>
+              <tr>
+                <th>Номер</th>
+                <th>Клиент</th>
+                <th>Курьер</th>
+                <th>Адрес</th>
+                <th>Статус</th>
+                {% if can_view_route_money %}
+                  <th class="num">Выручка</th>
+                  <th class="num">Курьеру</th>
+                {% endif %}
+                <th class="num">Действие</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for order in rs.detail_orders %}
+                <tr data-href="/orders/{{ order.id }}">
+                  <td>
+                    <span class="code">{{ order.order_code }}</span>
+                    {% if order.cargo_number %}<span class="cell-sub"><span class="cargo-pill">{{ order.cargo_number }}</span></span>{% endif %}
+                  </td>
+                  <td><span class="cell-main">{{ order.client_name_snapshot }}</span><span class="cell-sub nowrap">{{ order.client_phone_snapshot|phone }}</span></td>
+                  <td>{{ order.courier.full_name if order.courier else "Не назначен" }}</td>
+                  <td><span class="clamp-2">{{ order.address }}</span></td>
+                  <td>{{ ui.track(order.status) }}</td>
+                  {% if can_view_route_money %}
+                    <td class="num">{{ ui.money(order.delivery_cost) }}</td>
+                    <td class="num">{{ ui.money(order.courier_pay) }}</td>
+                  {% endif %}
+                  <td class="num"><a class="link" href="/orders/{{ order.id }}">Открыть</a></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="cards route-result-cards" aria-label="Заявки">
+        {% for order in rs.detail_orders %}
+          <a class="item-card" href="/orders/{{ order.id }}">
+            <div class="item-card-top">
+              <div>
+                <span class="code">{{ order.order_code }}</span>
+                <p class="cell-main">{{ order.client_name_snapshot }}</p>
+              </div>
+              {{ ui.track(order.status) }}
+            </div>
+            <p class="route-card-address">{{ order.address }}</p>
+            <p class="muted card-pair"><span>{{ order.courier.full_name if order.courier else "Не назначен" }}</span>{% if can_view_route_money %}<span>{{ order.delivery_cost|money }}</span>{% endif %}</p>
+          </a>
+        {% endfor %}
+      </div>
+    {% else %}
+      {{ ui.empty("По этому фильтру заявок нет", "Выберите другой статус или дату.", "inbox") }}
+    {% endif %}
+  </section>
+{% endif %}
+
+<script>
+  document.querySelectorAll('[data-autosubmit]').forEach((control) => {
+    control.addEventListener('change', () => control.form.requestSubmit());
+  });
+</script>

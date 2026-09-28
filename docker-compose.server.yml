@@ -1,0 +1,32 @@
+# Сервер: одна общая PostgreSQL на все витрины (контейнер showcase-postgres в сети showcase-net), своей базы здесь нет.
+# Образ собирается на рабочем компьютере и переносится: docker save | ssh … docker load.
+# Адрес базы, ключ и пароли — только в .env.server (пример — .env.server.example).
+name: showcase-courier
+
+services:
+  app:
+    image: showcase-courier-app:latest
+    container_name: showcase-courier-app
+    env_file: .env.server
+    environment:
+      DEMO_MODE: "true"
+      SEED_DEMO: "true"
+      SESSION_HTTPS_ONLY: "true"
+    ports:
+      - "127.0.0.1:8610:8000"
+    cpus: 1.0
+    mem_limit: 350m
+    memswap_limit: 350m
+    restart: unless-stopped
+    networks:
+      - showcase-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  showcase-net:
+    external: true
+    name: showcase-net

@@ -1,0 +1,57 @@
+# Caddy перед витриной «Ходко CRM». Тот же файл — на сервере и на локальном стенде.
+# На сервере SITE_ADDRESS — домен витрины (сертификат Caddy выпустит сам), локально — http://:80.
+{
+	servers {
+		# Адрес посетителя: от клиентов из интернета X-Forwarded-For перезаписывается их настоящим адресом,
+		# доверяем только частным сетям (локальный стенд, docker). Приложение берёт адрес из этого заголовка.
+		trusted_proxies static private_ranges
+	}
+}
+
+{$SITE_ADDRESS::80} {
+	# Сжатие делает Caddy (zstd для новых браузеров, gzip для остальных), поэтому у приложения
+	# сжатый ответ не просим — процессор приложения остаётся для страниц.
+	encode zstd gzip
+
+	# Журнал доступа с ротацией: 10 МБ на файл, 5 файлов, не старше 30 дней — диск не заполнится за полгода.
+	log {
+		output file /var/log/caddy/courier-access.log {
+			roll_size 10MiB
+			roll_keep 5
+			roll_keep_for 720h
+		}
+	}
+
+	# Формы системы — единицы килобайт, загрузок файлов нет: больше 1 МБ не пропускаем к приложению
+	# (у приложения свой предел 256 КБ).
+	request_body {
+		max_size 1MB
+	}
+
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		# Встраивание в iframe — только на своём сайте и на qxstay.ru с поддоменами.
+		Content-Security-Policy "frame-ancestors 'self' https://qxstay.ru https://*.qxstay.ru; base-uri 'self'; form-action 'self'; object-src 'none'"
+		Strict-Transport-Security "max-age=31536000"
+		# Витрину не индексируют поисковики: ещё meta robots в страницах и /robots.txt. Ссылки даёт автор.
+		X-Robots-Tag "noindex, nofollow"
+		-Server
+		-X-Powered-By
+		-Via
+	}
+
+	# Статика с хешем в имени не меняется никогда — год и immutable; HTML приложение отдаёт с no-cache.
+	# defer — заменить заголовок приложения, а не добавить второй такой же.
+	@hashed path_regexp ^/static/.+\.[0-9a-f]{10}\.[A-Za-z0-9]+$
+	header @hashed {
+		Cache-Control "public, max-age=31536000, immutable"
+		defer
+	}
+
+	reverse_proxy {$APP_UPSTREAM:app:8000} {
+		header_up -Accept-Encoding
+	}
+}
